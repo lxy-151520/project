@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>AnythingLLM 文档上传</title>
+<style>
+  body { font-family: sans-serif; max-width: 720px; margin: 40px auto; padding: 0 16px; }
+  #result { white-space: pre-wrap; background: #f5f5f5; padding: 12px; border-radius: 6px; min-height: 60px; margin-top: 16px; word-break: break-all; }
+  button { padding: 6px 20px; margin-left: 8px; }
+  .err { color: #c00; }
+</style>
+</head>
+<body>
+<h2>上传文档到 AnythingLLM 第一个工作区</h2>
+<input type="file" id="file">
+<button id="btn">上传</button>
+<div id="result">等待选择文件…</div>
+
+<script>
+const API = "http://localhost:3001/api";
+const KEY = "SJAK8HK-N8P46VM-P2APCQD-2Y7BZM6";
+const result = document.getElementById("result");
+
+function show(msg, isErr) {
+  result.textContent = msg;
+  result.className = isErr ? "err" : "";
+}
+
+document.getElementById("btn").onclick = async () => {
+  const file = document.getElementById("file").files[0];
+  if (!file) return show("请先选择文件", true);
+  show("上传中…");
+
+  try {
+    const headers = { Authorization: "Bearer " + KEY };
+
+    const wsRes = await fetch(API + "/v1/workspaces", { headers });
+    if (!wsRes.ok) throw new Error("获取工作区失败 HTTP " + wsRes.status + ": " + await wsRes.text());
+    const wsData = await wsRes.json();
+    const ws = (wsData.workspaces || [])[0];
+    if (!ws) throw new Error("没有找到任何工作区");
+
+    const fd = new FormData();
+    fd.append("file", file);
+    fd.append("addToWorkspaces", ws.slug);
+
+    const upRes = await fetch(API + "/v1/document/upload", { method: "POST", headers, body: fd });
+    const text = await upRes.text();
+    if (!upRes.ok) throw new Error("上传失败 HTTP " + upRes.status + ": " + text);
+    show("已上传并嵌入到工作区「" + ws.name + "」(" + ws.slug + ")\n\n" + JSON.stringify(JSON.parse(text), null, 2));
+  } catch (e) {
+    show(String(e.message || e), true);
+  }
+};
+</script>
+</body>
+</html>
