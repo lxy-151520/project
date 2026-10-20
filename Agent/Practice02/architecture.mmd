@@ -1,0 +1,41 @@
+graph TD
+    %% Practice02 - chat-stream-tool-fileOps.py 代码架构图
+
+    User([用户输入]) --> MainLoop[主循环 while True]
+    MainLoop --> AppendUser[追加 user 消息到 messages]
+    AppendUser --> CallLLM[call_llm 非流式请求<br/>携带 messages + tools]
+
+    CallLLM --> CheckFinish{finish_reason?}
+
+    CheckFinish -->|tool_calls| ParseTools[解析 tool_calls]
+    ParseTools --> ToolDispatch{tool_map 分发}
+
+    ToolDispatch --> GetDate[getDate<br/>本地 date/time 命令]
+    ToolDispatch --> IsLeapYear[isLeapYear<br/>Python 闰年算法]
+    ToolDispatch --> GetCWD[getCWD<br/>os.getcwd]
+    ToolDispatch --> ListDir[listDir<br/>os.listdir]
+    ToolDispatch --> GetFileType[getFileType<br/>os.path.splitext]
+    ToolDispatch --> ReadFile[readFile<br/>open 读取文本]
+    ToolDispatch --> CreateFile[createFile<br/>open 写入新文件]
+    ToolDispatch --> EditFile[editFile<br/>open 覆盖/追加]
+    ToolDispatch --> CreateDir[createDir<br/>os.makedirs]
+    ToolDispatch --> DeleteDir[deleteDir<br/>shutil.rmtree]
+    ToolDispatch --> DeleteFile[deleteFile<br/>os.remove]
+    ToolDispatch --> Rename[rename<br/>os.rename]
+
+    GetDate & IsLeapYear & GetCWD & ListDir & GetFileType & ReadFile & CreateFile & EditFile & CreateDir & DeleteDir & DeleteFile & Rename --> ToolResult[工具返回结果字符串]
+    ToolResult --> AppendTool[追加 role:tool 消息到 messages]
+    AppendTool --> CallLLM
+
+    CheckFinish -->|stop| StreamResp[stream_response 流式输出<br/>逐字打印回复]
+    StreamResp --> AppendAssistant[追加 assistant 消息到 messages]
+    AppendAssistant --> MainLoop
+
+    %% 样式
+    classDef tool fill:#e1f5ff,stroke:#0288d1,stroke-width:1px
+    classDef core fill:#fff3e0,stroke:#f57c00,stroke-width:2px
+    classDef io fill:#f3e5f5,stroke:#7b1fa2,stroke-width:1px
+
+    class GetDate,IsLeapYear,GetCWD,ListDir,GetFileType,ReadFile,CreateFile,EditFile,CreateDir,DeleteDir,DeleteFile,Rename tool
+    class MainLoop,CallLLM,CheckFinish,ToolDispatch core
+    class User,StreamResp io
