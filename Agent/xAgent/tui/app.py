@@ -6,7 +6,6 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical
 from textual.widgets import Footer, Header, Input, RichLog
-from textual.worker import Worker, WorkerState
 
 from ..core import Agent, AgentCallbacks, LLMClient, load_config
 
@@ -73,7 +72,6 @@ class XAgentApp(App):
 
     # ---------- 后台调用 Agent(不阻塞 UI) ----------
     def _run_agent(self, text: str):
-        # 用 run_worker 跑同步函数,通过 call_from_thread 把事件刷回 UI
         def job():
             self.agent.chat(text)
         self.run_worker(job, thread=True, exclusive=True, group="chat")
@@ -83,12 +81,10 @@ class XAgentApp(App):
         self.call_from_thread(self._write, f"  [yellow]⚙ 调用工具[/] [bold]{name}[/]({args})")
 
     def _ev_tool_result(self, name: str, result: str):
-        # 截断过长结果
         short = result if len(result) <= 300 else result[:300] + "..."
         self.call_from_thread(self._write, f"  [blue]↩ 返回[/] {short}")
 
     def _ev_token(self, piece: str):
-        # 流式 token: 首个 token 先写 "AI: " 前缀,后续 append
         if not self._streaming_line_open:
             self._streaming_line_open = True
             self.call_from_thread(self._stream_begin)
@@ -107,13 +103,12 @@ class XAgentApp(App):
 
     def _stream_append(self, piece: str):
         log = self.query_one("#log", RichLog)
-        # RichLog 每次 write 默认换行,改用 end="" 但 markup 可能含特殊字符,先转义
         log.write(piece.replace("[", "\\["), end="")
 
     def _close_stream_line(self):
         if self._streaming_line_open:
             self._streaming_line_open = False
-            self._write("")   # 换行收尾
+            self._write("")
 
     # ---------- 快捷键 ----------
     def action_clear(self):
