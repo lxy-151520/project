@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """工具汇总:TOOL_MAP (函数名 -> 可调用对象) 和 TOOL_SCHEMAS (OpenAI function calling schema)。"""
-from . import system_tools, file_tools
+from . import system_tools, file_tools, web_tools, cli_tools
 
 # ---------- 函数名 -> 实际函数 ----------
 TOOL_MAP = {
@@ -18,6 +18,11 @@ TOOL_MAP = {
     "deleteDir":   file_tools.deleteDir,
     "deleteFile":  file_tools.deleteFile,
     "rename":      file_tools.rename,
+    # 网络工具
+    "searchWeb":   web_tools.searchWeb,
+    "fetchWeb":    web_tools.fetchWeb,
+    # 本地 CLI
+    "runCommand":  cli_tools.runCommand,
 }
 
 
@@ -38,6 +43,7 @@ def _fn(name: str, desc: str, properties: dict, required: list[str] | None = Non
 
 # ---------- OpenAI tools schema ----------
 TOOL_SCHEMAS = [
+    # ---- 系统信息 ----
     _fn("getDate", "获取当前本地日期和时间(调用 Windows 本地命令)", {}),
     _fn("isLeapYear", "判断某一年是否为闰年", {
         "year": {"type": "integer", "description": "年份,例如 2024"},
@@ -46,6 +52,8 @@ TOOL_SCHEMAS = [
     _fn("getFileType", "根据文件路径返回扩展名", {
         "path": {"type": "string", "description": "文件路径"},
     }, ["path"]),
+
+    # ---- 文件/目录操作 ----
     _fn("listDir", "列出目录下的文件与子目录及大小", {
         "path": {"type": "string", "description": "目录路径,默认当前目录"},
     }),
@@ -74,4 +82,20 @@ TOOL_SCHEMAS = [
         "src": {"type": "string", "description": "原路径"},
         "dst": {"type": "string", "description": "新路径"},
     }, ["src", "dst"]),
+
+    # ---- 网络工具 ----
+    _fn("searchWeb", "调用百度千帆 AI 搜索,搜索互联网上的实时信息,返回标题/摘要/URL。需要 config.ini 的 [search] 段配置 baidu_qianfan_api_key。", {
+        "query": {"type": "string", "description": "搜索关键词或问题,例如 '2026年国庆放几天假'"},
+        "top_k": {"type": "integer", "description": "返回结果条数,默认 8,上限 10"},
+    }, ["query"]),
+    _fn("fetchWeb", "抓取指定 URL 的网页,用 trafilatura 提取正文并转为 Markdown。适合阅读文章、查看文档内容。", {
+        "url": {"type": "string", "description": "完整的网页 URL,例如 'https://example.com/article'"},
+        "max_chars": {"type": "integer", "description": "返回正文最大字符数,默认 4000"},
+    }, ["url"]),
+
+    # ---- 本地 CLI ----
+    _fn("runCommand", "执行一条本地命令行(如 python -V、git status、pip list 等)。有安全白名单,危险命令会被拒绝。", {
+        "command": {"type": "string", "description": "要执行的命令行,例如 'python -V' 或 'git status'"},
+        "timeout": {"type": "integer", "description": "超时秒数,默认 10,上限 60"},
+    }, ["command"]),
 ]
