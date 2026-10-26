@@ -30,7 +30,7 @@ def _get_search_api_key() -> str:
     import configparser
     from pathlib import Path
     # 向上找到项目根 (xAgent/)
-    root = Path(__file__).resolve().parents[3]  # tools/ -> core/ -> xAgent/
+    root = Path(__file__).resolve().parents[2]  # tools/ -> core/ -> xAgent/
     ini = root / "config.ini"
     if not ini.exists():
         return ""

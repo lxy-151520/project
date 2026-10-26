@@ -2,6 +2,8 @@
 """Textual TUI 界面:消息列表 + 输入框,工具调用过程实时可见。"""
 from __future__ import annotations
 
+from pathlib import Path
+
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical
@@ -32,16 +34,20 @@ class XAgentApp(App):
 
     def __init__(self):
         super().__init__()
-        cfg = load_config("config.ini")
+        # 用 __file__ 定位 config.ini,避免依赖当前运行目录
+        ini_path = Path(__file__).resolve().parent.parent / "config.ini"
+        cfg = load_config(ini_path)
         llm = LLMClient(cfg)
         cb = AgentCallbacks(
             on_tool_call=self._ev_tool_call,
             on_tool_result=self._ev_tool_result,
             on_token=self._ev_token,
+            on_response_done=self._ev_response_done,
             on_error=self._ev_error,
         )
         self.agent = Agent(llm=llm, callbacks=cb)
-        self._streaming_line_open = False   # 是否正在流式输出一行
+        self._streaming_tokens: list[str] = []   # 累计流式 token
+        self._streaming_line_open = False        # 是否正在流式输出一行
 
     # ---------- UI 布局 ----------
     def compose(self) -> ComposeResult:
@@ -85,30 +91,57 @@ class XAgentApp(App):
         self.call_from_thread(self._write, f"  [blue]↩ 返回[/] {short}")
 
     def _ev_token(self, piece: str):
+        """把流式 token 累积,攒够就 write (RichLog 不支持 end 参数)。"""
+        self._streaming_tokens.append(piece)
         if not self._streaming_line_open:
             self._streaming_line_open = True
-            self.call_from_thread(self._stream_begin)
-        self.call_from_thread(self._stream_append, piece)
+            self.call_from_thread(self._write, "[bold magenta]AI:[/] ", flush_stream=False)
+        # 攒够就批量输出 (减少刷新频率)
+        if len(self._streaming_tokens) >= 3:
+            chunk = "".join(self._streaming_tokens)
+            self._streaming_tokens.clear()
+            self.call_from_thread(self._write_stream_chunk, chunk)
 
     def _ev_error(self, msg: str):
-        self.call_from_thread(self._write, f"[bold red]错误:[/] {msg}")
+        # 先把残留 token 输出掉
+        self._flush_stream()
+        self.call_from_thread(self._write, f"[bold red]错误:[/] {msg}", flush_stream=True)
+
+    def _ev_response_done(self, full_text: str):
+        """Agent 完整回复完成 —— 冲刷残留 token,重置状态。"""
+        self.call_from_thread(self._stream_finish)
 
     # ---------- 线程安全的 UI 更新 ----------
-    def _write(self, markup: str):
-        self.query_one("#log", RichLog).write(markup)
-
-    def _stream_begin(self):
+    def _write(self, markup: str, flush_stream: bool = True):
         log = self.query_one("#log", RichLog)
-        log.write("[bold magenta]AI:[/] ", end="")
+        if flush_stream:
+            self._flush_stream()
+        log.write(markup)
 
-    def _stream_append(self, piece: str):
+    def _write_stream_chunk(self, chunk: str):
         log = self.query_one("#log", RichLog)
-        log.write(piece.replace("[", "\\["), end="")
+        # 转义 [ 避免被当 markup
+        safe = chunk.replace("[", "\\[")
+        log.write(safe)
+
+    def _flush_stream(self):
+        """把残留的流式 token 全部输出 (换行)。"""
+        if self._streaming_tokens:
+            chunk = "".join(self._streaming_tokens)
+            self._streaming_tokens.clear()
+            log = self.query_one("#log", RichLog)
+            log.write(chunk.replace("[", "\\["))
 
     def _close_stream_line(self):
         if self._streaming_line_open:
             self._streaming_line_open = False
-            self._write("")
+            self._flush_stream()
+
+    def _stream_finish(self):
+        """流式输出结束 —— 冲刷 + 换状态。"""
+        self._flush_stream()
+        self._streaming_line_open = False
+        self._streaming_tokens.clear()
 
     # ---------- 快捷键 ----------
     def action_clear(self):
