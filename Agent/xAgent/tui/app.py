@@ -2,6 +2,8 @@
 """Textual TUI 界面:消息列表 + 输入框,工具调用过程实时可见。"""
 from __future__ import annotations
 
+import sys
+import traceback
 from pathlib import Path
 
 from textual.app import App, ComposeResult
@@ -10,6 +12,28 @@ from textual.containers import Vertical
 from textual.widgets import Footer, Header, Input, RichLog
 
 from ..core import Agent, AgentCallbacks, LLMClient, load_config
+
+
+def _find_config_ini() -> Path:
+    """智能定位 config.ini:源码运行和 PyInstaller 打包后都能找到。
+
+    优先级:
+    1. sys.frozen 模式(打包后):exe 所在目录
+    2. 源码模式:__file__ 所在目录往上找到 xAgent/
+    3. 兜底:相对路径 config.ini
+    """
+    # 情况 1: PyInstaller 打包后,exe 同级目录
+    if getattr(sys, "frozen", False):
+        base = Path(sys.executable).resolve().parent
+        ini = base / "config.ini"
+        if ini.exists():
+            return ini
+    # 情况 2:源码运行,__file__ → tui/ → xAgent/
+    ini = Path(__file__).resolve().parent.parent / "config.ini"
+    if ini.exists():
+        return ini
+    # 情况 3:兜底
+    return Path("config.ini").resolve()
 
 
 class XAgentApp(App):
@@ -34,20 +58,28 @@ class XAgentApp(App):
 
     def __init__(self):
         super().__init__()
-        # 用 __file__ 定位 config.ini,避免依赖当前运行目录
-        ini_path = Path(__file__).resolve().parent.parent / "config.ini"
-        cfg = load_config(ini_path)
-        llm = LLMClient(cfg)
-        cb = AgentCallbacks(
-            on_tool_call=self._ev_tool_call,
-            on_tool_result=self._ev_tool_result,
-            on_token=self._ev_token,
-            on_response_done=self._ev_response_done,
-            on_error=self._ev_error,
-        )
-        self.agent = Agent(llm=llm, callbacks=cb)
-        self._streaming_tokens: list[str] = []   # 累计流式 token
-        self._streaming_line_open = False        # 是否正在流式输出一行
+        try:
+            ini_path = _find_config_ini()
+            cfg = load_config(ini_path)
+            llm = LLMClient(cfg)
+            cb = AgentCallbacks(
+                on_tool_call=self._ev_tool_call,
+                on_tool_result=self._ev_tool_result,
+                on_token=self._ev_token,
+                on_response_done=self._ev_response_done,
+                on_error=self._ev_error,
+            )
+            self.agent = Agent(llm=llm, callbacks=cb)
+        except Exception as e:
+            # 启动失败时打印完整 traceback,然后让 TUI 还能起来显示错误
+            print("=" * 50, file=sys.stderr)
+            print(f"[xAgent 启动失败] {e}", file=sys.stderr)
+            traceback.print_exc()
+            print("=" * 50, file=sys.stderr)
+            # 让 app 还能启动,但 agent 为 None,避免崩掉
+            self.agent = None
+        self._streaming_tokens: list[str] = []
+        self._streaming_line_open = False
 
     # ---------- UI 布局 ----------
     def compose(self) -> ComposeResult:
@@ -62,8 +94,12 @@ class XAgentApp(App):
         self.sub_title = "core/UI 分离架构演示"
         self.query_one("#input", Input).focus()
         log = self.query_one("#log", RichLog)
-        log.write("[bold cyan]xAgent 已启动[/]  支持工具: getDate / isLeapYear / 文件目录操作")
-        log.write("[dim]试试: 今天日期 / 2024年是闰年吗 / 列出当前目录 / 创建文件 hello.txt 内容你好[/]\n")
+        if self.agent is None:
+            log.write("[bold red]⚠ Agent 初始化失败[/] 请确认 config.ini 在 exe 同级目录,且 API key 正确")
+            log.write("[dim]启动时的详细错误已打印到终端窗口[/]\n")
+        else:
+            log.write("[bold cyan]xAgent 已启动[/]  支持工具: getDate / isLeapYear / 文件目录操作 / searchWeb / fetchWeb / Run")
+            log.write("[dim]试试: 今天日期 / 2024年是闰年吗 / 搜索国庆放几天 / 运行 python -V[/]\n")
 
     # ---------- 输入提交 ----------
     def on_input_submitted(self, event: Input.Submitted):
@@ -72,6 +108,9 @@ class XAgentApp(App):
             return
         event.input.value = ""
         log = self.query_one("#log", RichLog)
+        if self.agent is None:
+            log.write("[bold red]Agent 未就绪[/] 无法处理请求,请检查配置后重启")
+            return
         log.write(f"[bold green]你:[/] {text}")
         self._close_stream_line()
         self._run_agent(text)
