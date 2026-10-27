@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """工具汇总:TOOL_MAP (函数名 -> 可调用对象) 和 TOOL_SCHEMAS (OpenAI function calling schema)。"""
-from . import system_tools, file_tools, web_tools, cli_tools
+from . import system_tools, file_tools, web_tools, cli_tools, run_tool
 
 # ---------- 函数名 -> 实际函数 ----------
 TOOL_MAP = {
@@ -23,6 +23,8 @@ TOOL_MAP = {
     "fetchWeb":    web_tools.fetchWeb,
     # 本地 CLI
     "runCommand":  cli_tools.runCommand,
+    # Run 工具 (教学版: subprocess + shell=False, 带白名单/黑名单)
+    "Run":         run_tool.Run,
 }
 
 
@@ -97,5 +99,12 @@ TOOL_SCHEMAS = [
     _fn("runCommand", "执行一条本地命令行(如 python -V、git status、pip list 等)。有安全白名单,危险命令会被拒绝。", {
         "command": {"type": "string", "description": "要执行的命令行,例如 'python -V' 或 'git status'"},
         "timeout": {"type": "integer", "description": "超时秒数,默认 10,上限 60"},
+    }, ["command"]),
+
+    # ---- Run (教学版) ----
+    _fn("Run", "执行一条本地 CLI 程序,返回 stdout/stderr/exit_code。用 subprocess + shell=False,参数列表方式避免注入。", {
+        "command": {"type": "string", "description": "可执行程序名或路径,例如 'python'、'git'、'pip'"},
+        "args":    {"type": "array", "items": {"type": "string"}, "description": "参数列表,例如 ['-V']、['status']、['list']"},
+        "timeout": {"type": "integer", "description": "超时秒数,默认 15,上限 120"},
     }, ["command"]),
 ]
