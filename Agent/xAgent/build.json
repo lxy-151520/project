@@ -1,0 +1,16 @@
+{
+    "name": "xAgent",
+    "display_name": "xAgent - AI Agent with Function Calling",
+    "entry": "main.py",
+    "version": "1.0.0",
+    "publisher": "xAgent Team",
+    "target": "windows",
+    "onefile": true,
+    "windowed": false,
+    "console": true,
+    "icon": null,
+    "license": null,
+    "readme": "README.md",
+    "hooks": [],
+    "production": true
+}
