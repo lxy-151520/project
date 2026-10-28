@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """工具汇总:TOOL_MAP (函数名 -> 可调用对象) 和 TOOL_SCHEMAS (OpenAI function calling schema)。"""
-from . import system_tools, file_tools, web_tools, cli_tools, run_tool
+from . import system_tools, file_tools, web_tools, cli_tools, run_tool, skill_tools
 
 # ---------- 函数名 -> 实际函数 ----------
 TOOL_MAP = {
@@ -25,6 +25,8 @@ TOOL_MAP = {
     "runCommand":  cli_tools.runCommand,
     # Run 工具 (教学版: subprocess + shell=False, 带白名单/黑名单)
     "Run":         run_tool.Run,
+    # Skill 动态加载
+    "loadSkill":   skill_tools.loadSkill,
 }
 
 
@@ -107,4 +109,10 @@ TOOL_SCHEMAS = [
         "args":    {"type": "array", "items": {"type": "string"}, "description": "参数列表,例如 ['-V']、['status']、['list']"},
         "timeout": {"type": "integer", "description": "超时秒数,默认 15,上限 120"},
     }, ["command"]),
+
+    # ---- Skill 动态加载 ----
+    _fn("loadSkill", "加载 .agents/skills 下的某个 Skill 的完整说明,或 Skill 目录里的附属文件。项目初始化时会列出所有可用 Skill 的 name 和 description,你只需要传入 name 即可。filename 可选,不传则读取 SKILL.md 全文。路径解析优先级:绝对路径 > 项目相对路径 > Skill 目录相对路径 > 文件名模糊匹配。所有读取严格限制在 Skill 目录内以避免路径穿越。", {
+        "name":     {"type": "string", "description": "Skill 名称,对应 SKILL.md frontmatter 的 name 字段或 Skill 目录名,例如 'code-review'"},
+        "filename": {"type": "string", "description": "可选,Skill 目录下要读取的文件路径,例如 'prompt.md' 或 'templates/review.txt'"},
+    }, ["name"]),
 ]

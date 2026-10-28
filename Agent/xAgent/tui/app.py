@@ -58,6 +58,7 @@ class XAgentApp(App):
 
     def __init__(self):
         super().__init__()
+        self._init_error: str | None = None
         try:
             ini_path = _find_config_ini()
             cfg = load_config(ini_path)
@@ -71,12 +72,22 @@ class XAgentApp(App):
             )
             self.agent = Agent(llm=llm, callbacks=cb)
         except Exception as e:
-            # 启动失败时打印完整 traceback,然后让 TUI 还能起来显示错误
+            tb = traceback.format_exc()
+            self._init_error = f"{e}\n\n{tb}"
+            # 启动失败时也打印到 stderr
             print("=" * 50, file=sys.stderr)
             print(f"[xAgent 启动失败] {e}", file=sys.stderr)
             traceback.print_exc()
             print("=" * 50, file=sys.stderr)
-            # 让 app 还能启动,但 agent 为 None,避免崩掉
+            # 同时写一份到本地文件 (PyInstaller 打包后看不到 stderr 时用)
+            try:
+                log_path = Path.cwd() / "_xagent_init_error.log"
+                log_path.write_text(
+                    f"[{ini_path if 'ini_path' in dir() else 'unknown'}]\n{self._init_error}",
+                    encoding="utf-8",
+                )
+            except Exception:
+                pass
             self.agent = None
         self._streaming_tokens: list[str] = []
         self._streaming_line_open = False
@@ -95,8 +106,11 @@ class XAgentApp(App):
         self.query_one("#input", Input).focus()
         log = self.query_one("#log", RichLog)
         if self.agent is None:
-            log.write("[bold red]⚠ Agent 初始化失败[/] 请确认 config.ini 在 exe 同级目录,且 API key 正确")
-            log.write("[dim]启动时的详细错误已打印到终端窗口[/]\n")
+            log.write("[bold red]⚠ Agent 初始化失败[/] 详细错误如下 (也已写入 _xagent_init_error.log):")
+            if self._init_error:
+                # 用 [dim] 包裹,避免 traceback 里的特殊字符被当 markup 解析
+                safe = self._init_error.replace("[", "\\[")
+                log.write(f"[dim]{safe}[/]")
         else:
             log.write("[bold cyan]xAgent 已启动[/]  支持工具: getDate / isLeapYear / 文件目录操作 / searchWeb / fetchWeb / Run")
             log.write("[dim]试试: 今天日期 / 2024年是闰年吗 / 搜索国庆放几天 / 运行 python -V[/]\n")

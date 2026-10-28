@@ -7,10 +7,12 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Callable, Optional
 
 from .llm import LLMClient
-from .tools import TOOL_MAP, TOOL_SCHEMAS
+from .skills import discover_skills, build_skills_prompt
+from .tools import TOOL_MAP, TOOL_SCHEMAS, skill_tools
 
 
 # ---------- UI 事件回调(所有钩子都是可选的) ----------
@@ -31,6 +33,7 @@ DEFAULT_SYSTEM = (
     "  - 文件工具: listDir、readFile、createFile、editFile、createDir、deleteDir、deleteFile、rename\n"
     "  - 网络工具: searchWeb(百度搜索实时信息)、fetchWeb(抓取网页正文转 Markdown)\n"
     "  - 命令行: runCommand(执行本地 python/git 等命令)\n"
+    "  - Skill 动态加载: loadSkill(加载 .agents/skills 下的 Skill 完整说明或附属文件)\n"
     "回答要简洁。调用工具时严格按 schema 提供参数。"
     "回答中可以引用搜索结果的来源 URL,抓取的网页内容用 Markdown 呈现。"
 )
@@ -40,13 +43,25 @@ DEFAULT_SYSTEM = (
 class Agent:
     """对话 + 工具调用 Agent。同一个 Agent 实例保留完整对话历史。"""
     llm: LLMClient
-    system_prompt: str = DEFAULT_SYSTEM
+    system_prompt: str = ""          # 留空则自动使用 DEFAULT_SYSTEM + Skill 列表
+    project_root: str = ""           # 留空则自动使用当前工作目录
     callbacks: AgentCallbacks = field(default_factory=AgentCallbacks)
     max_tool_rounds: int = 8
 
     def __post_init__(self):
+        # 1. 确定项目根目录
+        root = Path(self.project_root) if self.project_root else Path.cwd()
+        root = root.resolve()
+        skill_tools.set_project_root(root)
+
+        # 2. 发现 Skill,注入 System Prompt
+        discovered = discover_skills(root)
+        skill_prompt = build_skills_prompt(discovered)
+
+        base = self.system_prompt or DEFAULT_SYSTEM
+        final_prompt = (base + "\n\n" + skill_prompt) if skill_prompt else base
         self.messages: list[dict] = [
-            {"role": "system", "content": self.system_prompt}
+            {"role": "system", "content": final_prompt}
         ]
 
     # ---------- 公开 API ----------
