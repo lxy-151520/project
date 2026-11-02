@@ -8,8 +8,8 @@ from pathlib import Path
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Vertical
-from textual.widgets import Footer, Header, Input, RichLog
+from textual.containers import Vertical, VerticalScroll
+from textual.widgets import Footer, Header, Input, Static
 
 from ..core import Agent, AgentCallbacks, LLMClient, load_config
 
@@ -91,12 +91,14 @@ class XAgentApp(App):
             self.agent = None
         self._streaming_tokens: list[str] = []
         self._streaming_line_open = False
+        self._stream_text: str = ""
+        self._stream_static: Static | None = None
 
     # ---------- UI 布局 ----------
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True, name="xAgent")
         with Vertical():
-            yield RichLog(id="log", markup=True, auto_scroll=True, wrap=True)
+            yield VerticalScroll(id="log")
             yield Input(placeholder="输入消息,Enter 发送...", id="input")
         yield Footer()
 
@@ -104,16 +106,15 @@ class XAgentApp(App):
         self.title = "xAgent TUI"
         self.sub_title = "core/UI 分离架构演示"
         self.query_one("#input", Input).focus()
-        log = self.query_one("#log", RichLog)
         if self.agent is None:
-            log.write("[bold red]⚠ Agent 初始化失败[/] 详细错误如下 (也已写入 _xagent_init_error.log):")
+            self._log("[bold red]⚠ Agent 初始化失败[/] 详细错误如下 (也已写入 _xagent_init_error.log):")
             if self._init_error:
-                # 用 [dim] 包裹,避免 traceback 里的特殊字符被当 markup 解析
+                # 转义 [ 避免被当 markup
                 safe = self._init_error.replace("[", "\\[")
-                log.write(f"[dim]{safe}[/]")
+                self._log(f"[dim]{safe}[/]")
         else:
-            log.write("[bold cyan]xAgent 已启动[/]  支持工具: getDate / isLeapYear / 文件目录操作 / searchWeb / fetchWeb / Run")
-            log.write("[dim]试试: 今天日期 / 2024年是闰年吗 / 搜索国庆放几天 / 运行 python -V[/]\n")
+            self._log("[bold cyan]xAgent 已启动[/]  支持工具: getDate / isLeapYear / 文件目录操作 / searchWeb / fetchWeb / Run / loadSkill / createSkill")
+            self._log("[dim]试试: 今天日期 / 2024年是闰年吗 / 搜索国庆放几天 / 运行 python -V[/]")
 
     # ---------- 输入提交 ----------
     def on_input_submitted(self, event: Input.Submitted):
@@ -121,11 +122,10 @@ class XAgentApp(App):
         if not text:
             return
         event.input.value = ""
-        log = self.query_one("#log", RichLog)
         if self.agent is None:
-            log.write("[bold red]Agent 未就绪[/] 无法处理请求,请检查配置后重启")
+            self._log("[bold red]Agent 未就绪[/] 无法处理请求,请检查配置后重启")
             return
-        log.write(f"[bold green]你:[/] {text}")
+        self._log(f"[bold green]你:[/] {text.replace('[', chr(92) + '[')}")
         self._close_stream_line()
         self._run_agent(text)
 
@@ -137,68 +137,85 @@ class XAgentApp(App):
 
     # ---------- Agent 回调(注意:在 worker 线程中触发) ----------
     def _ev_tool_call(self, name: str, args: dict):
-        self.call_from_thread(self._write, f"  [yellow]⚙ 调用工具[/] [bold]{name}[/]({args})")
+        self.call_from_thread(self._log, f"  [yellow]⚙ 调用工具[/] [bold]{name}[/]({args})")
 
     def _ev_tool_result(self, name: str, result: str):
         short = result if len(result) <= 300 else result[:300] + "..."
-        self.call_from_thread(self._write, f"  [blue]↩ 返回[/] {short}")
+        self.call_from_thread(self._log, f"  [blue]↩ 返回[/] {short.replace('[', chr(92) + '[')}")
 
     def _ev_token(self, piece: str):
-        """把流式 token 累积,攒够就 write (RichLog 不支持 end 参数)。"""
+        """流式 token:累积后追加到同一个 Static,保证一段回复只有一行。"""
         self._streaming_tokens.append(piece)
         if not self._streaming_line_open:
             self._streaming_line_open = True
-            self.call_from_thread(self._write, "[bold magenta]AI:[/] ", flush_stream=False)
-        # 攒够就批量输出 (减少刷新频率)
+            self.call_from_thread(self._open_stream_line)
         if len(self._streaming_tokens) >= 3:
             chunk = "".join(self._streaming_tokens)
             self._streaming_tokens.clear()
-            self.call_from_thread(self._write_stream_chunk, chunk)
+            self.call_from_thread(self._append_stream, chunk)
 
     def _ev_error(self, msg: str):
-        # 先把残留 token 输出掉
-        self._flush_stream()
-        self.call_from_thread(self._write, f"[bold red]错误:[/] {msg}", flush_stream=True)
+        self.call_from_thread(self._flush_stream)
+        self.call_from_thread(self._finish_stream_line)
+        self.call_from_thread(self._log, f"[bold red]错误:[/] {msg}")
 
     def _ev_response_done(self, full_text: str):
         """Agent 完整回复完成 —— 冲刷残留 token,重置状态。"""
         self.call_from_thread(self._stream_finish)
 
     # ---------- 线程安全的 UI 更新 ----------
-    def _write(self, markup: str, flush_stream: bool = True):
-        log = self.query_one("#log", RichLog)
-        if flush_stream:
-            self._flush_stream()
-        log.write(markup)
+    def _log(self, markup: str):
+        """追加一行日志(markup 字符串)。"""
+        container = self.query_one("#log", VerticalScroll)
+        container.mount(Static(markup, markup=True))
+        container.scroll_end(animate=False)
 
-    def _write_stream_chunk(self, chunk: str):
-        log = self.query_one("#log", RichLog)
-        # 转义 [ 避免被当 markup
-        safe = chunk.replace("[", "\\[")
-        log.write(safe)
+    def _open_stream_line(self):
+        """开一个新的流式行占位。"""
+        self._stream_text = ""
+        self._stream_static = Static("[bold magenta]AI:[/] ", markup=True)
+        container = self.query_one("#log", VerticalScroll)
+        container.mount(self._stream_static)
+        container.scroll_end(animate=False)
+
+    def _append_stream(self, chunk: str):
+        """把新 chunk 拼接到当前流式行末尾(原地更新,不换行)。"""
+        self._stream_text += chunk
+        self._render_stream()
+
+    def _render_stream(self):
+        static = getattr(self, "_stream_static", None)
+        if static is None:
+            return
+        safe = self._stream_text.replace("[", "\\[")
+        static.update(f"[bold magenta]AI:[/] {safe}")
+        self.query_one("#log", VerticalScroll).scroll_end(animate=False)
 
     def _flush_stream(self):
-        """把残留的流式 token 全部输出 (换行)。"""
         if self._streaming_tokens:
             chunk = "".join(self._streaming_tokens)
             self._streaming_tokens.clear()
-            log = self.query_one("#log", RichLog)
-            log.write(chunk.replace("[", "\\["))
+            self._stream_text += chunk
+            self._render_stream()
+
+    def _finish_stream_line(self):
+        self._stream_static = None
+        self._stream_text = ""
+        self._streaming_line_open = False
 
     def _close_stream_line(self):
         if self._streaming_line_open:
-            self._streaming_line_open = False
             self._flush_stream()
+            self._finish_stream_line()
 
     def _stream_finish(self):
-        """流式输出结束 —— 冲刷 + 换状态。"""
         self._flush_stream()
-        self._streaming_line_open = False
         self._streaming_tokens.clear()
+        self._finish_stream_line()
 
     # ---------- 快捷键 ----------
     def action_clear(self):
-        self.query_one("#log", RichLog).clear()
+        self.query_one("#log", VerticalScroll).remove_children()
 
 
 def main():
