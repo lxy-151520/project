@@ -27,6 +27,8 @@ TOOL_MAP = {
     "Run":         run_tool.Run,
     # Skill 动态加载
     "loadSkill":   skill_tools.loadSkill,
+    # Skill 创建
+    "createSkill": skill_tools.createSkill,
 }
 
 
@@ -115,4 +117,10 @@ TOOL_SCHEMAS = [
         "name":     {"type": "string", "description": "Skill 名称,对应 SKILL.md frontmatter 的 name 字段或 Skill 目录名,例如 'code-review'"},
         "filename": {"type": "string", "description": "可选,Skill 目录下要读取的文件路径,例如 'prompt.md' 或 'templates/review.txt'"},
     }, ["name"]),
+
+    # ---- Skill 创建 ----
+    _fn("createSkill", "当用户要求新建/生成一个 Skill 时调用。在项目 .agents/skills/<name>/ 下创建目录并写入符合 Agent Skills 规范的 SKILL.md。目标已存在时不会覆盖,只返回提示。", {
+        "name":         {"type": "string", "description": "Skill 名称,只能用全小写英文、数字和连字符,例如 'code-review'、'pdf-parse'"},
+        "skillContext": {"type": "string", "description": "要写入 SKILL.md 的完整内容,必须以 YAML frontmatter(前后用 --- 包裹)开头,包含 name 与 description 字段,其后写正文;其中 name 必须与参数 name 完全相同"},
+    }, ["name", "skillContext"]),
 ]
