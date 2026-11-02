@@ -90,9 +90,12 @@ def _validate_skill(name: str, content: str) -> str | None:
     if not fm_name:
         return "创建失败:frontmatter 缺少 name 字段。请补上 name: " + name + " 后重试。"
     if fm_name != name:
+        hint = f"请把 frontmatter 里的 name 改为 {name} 后重试。"
+        if "_" in fm_name:
+            hint += "注意规范要求连字符(-),不支持下划线(_)。"
         return (
             f"创建失败:frontmatter 中的 name('{fm_name}')与参数 name('{name}')不一致。"
-            "两者必须完全相同,请修正后重试。"
+            + hint
         )
     if not meta.get("description"):
         return "创建失败:frontmatter 缺少 description 字段(说明该 Skill 的用途与触发时机)。请补充后重试。"

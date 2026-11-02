@@ -14,6 +14,16 @@ from textual.widgets import Footer, Header, Input, Static
 from ..core import Agent, AgentCallbacks, LLMClient, load_config
 
 
+def _esc(value) -> str:
+    """把动态内容变成安全的 markup 字面量。
+
+    注意不能用 rich.markup.escape:它只转义"像标签"的 [ (后跟字母/#/@),
+    而 dict/list 的 repr(如 ['create', 'demo.pptx']) 里 [ 后面是引号,会漏掉,
+    导致 MarkupError。这里无条件转义反斜杠和所有 [。
+    """
+    return str(value).replace("\\", "\\\\").replace("[", "\\[")
+
+
 def _find_config_ini() -> Path:
     """智能定位 config.ini:源码运行和 PyInstaller 打包后都能找到。
 
@@ -109,9 +119,7 @@ class XAgentApp(App):
         if self.agent is None:
             self._log("[bold red]⚠ Agent 初始化失败[/] 详细错误如下 (也已写入 _xagent_init_error.log):")
             if self._init_error:
-                # 转义 [ 避免被当 markup
-                safe = self._init_error.replace("[", "\\[")
-                self._log(f"[dim]{safe}[/]")
+                self._log(f"[dim]{_esc(self._init_error)}[/]")
         else:
             self._log("[bold cyan]xAgent 已启动[/]  支持工具: getDate / isLeapYear / 文件目录操作 / searchWeb / fetchWeb / Run / loadSkill / createSkill")
             self._log("[dim]试试: 今天日期 / 2024年是闰年吗 / 搜索国庆放几天 / 运行 python -V[/]")
@@ -125,7 +133,7 @@ class XAgentApp(App):
         if self.agent is None:
             self._log("[bold red]Agent 未就绪[/] 无法处理请求,请检查配置后重启")
             return
-        self._log(f"[bold green]你:[/] {text.replace('[', chr(92) + '[')}")
+        self._log(f"[bold green]你:[/] {_esc(text)}")
         self._close_stream_line()
         self._run_agent(text)
 
@@ -137,11 +145,14 @@ class XAgentApp(App):
 
     # ---------- Agent 回调(注意:在 worker 线程中触发) ----------
     def _ev_tool_call(self, name: str, args: dict):
-        self.call_from_thread(self._log, f"  [yellow]⚙ 调用工具[/] [bold]{name}[/]({args})")
+        self.call_from_thread(
+            self._log,
+            f"  [yellow]⚙ 调用工具[/] [bold]{_esc(name)}[/]({_esc(args)})",
+        )
 
     def _ev_tool_result(self, name: str, result: str):
         short = result if len(result) <= 300 else result[:300] + "..."
-        self.call_from_thread(self._log, f"  [blue]↩ 返回[/] {short.replace('[', chr(92) + '[')}")
+        self.call_from_thread(self._log, f"  [blue]↩ 返回[/] {_esc(short)}")
 
     def _ev_token(self, piece: str):
         """流式 token:累积后追加到同一个 Static,保证一段回复只有一行。"""
@@ -157,7 +168,7 @@ class XAgentApp(App):
     def _ev_error(self, msg: str):
         self.call_from_thread(self._flush_stream)
         self.call_from_thread(self._finish_stream_line)
-        self.call_from_thread(self._log, f"[bold red]错误:[/] {msg}")
+        self.call_from_thread(self._log, f"[bold red]错误:[/] {_esc(msg)}")
 
     def _ev_response_done(self, full_text: str):
         """Agent 完整回复完成 —— 冲刷残留 token,重置状态。"""
@@ -187,8 +198,7 @@ class XAgentApp(App):
         static = getattr(self, "_stream_static", None)
         if static is None:
             return
-        safe = self._stream_text.replace("[", "\\[")
-        static.update(f"[bold magenta]AI:[/] {safe}")
+        static.update(f"[bold magenta]AI:[/] {_esc(self._stream_text)}")
         self.query_one("#log", VerticalScroll).scroll_end(animate=False)
 
     def _flush_stream(self):

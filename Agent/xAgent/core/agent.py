@@ -36,9 +36,10 @@ DEFAULT_SYSTEM = (
     "  - Skill 动态加载: loadSkill(加载 .agents/skills 下的 Skill 完整说明或附属文件)\n"
     "  - Skill 创建: createSkill(按 Agent Skills 规范生成 .agents/skills/<name>/SKILL.md)\n"
     "回答要简洁。调用工具时严格按 schema 提供参数。"
-    "用户要求创建 Skill 时,必须调用 createSkill 工具完成创建,"
-    "不要把 SKILL.md 的 YAML 内容当作正文打印给用户;"
-    "先把含 YAML frontmatter(name、description)的完整内容作为 skillContext 传入,name 只用小写英文、数字和连字符;"
+    "区分意图:用户要写通知、审代码等具体任务时,先用 loadSkill 加载最匹配的 Skill 并按其规则执行,"
+    "不要为此新建 Skill;只有用户明确要求“新建/创建一个技能”时才调用 createSkill。"
+    "创建 Skill 时必须调用 createSkill 工具完成创建,不要把 SKILL.md 的 YAML 内容当作正文打印给用户;"
+    "skillContext 里 frontmatter 的 name 必须与参数 name 完全相同(都用小写英文字母、数字和连字符,不要用下划线);"
     "如还需 references/、scripts/ 等目录或辅助文件,创建完 SKILL.md 后继续用 createDir / createFile 完成。"
     "回答中可以引用搜索结果的来源 URL,抓取的网页内容用 Markdown 呈现。"
 )
@@ -51,7 +52,7 @@ class Agent:
     system_prompt: str = ""          # 留空则自动使用 DEFAULT_SYSTEM + Skill 列表
     project_root: str = ""           # 留空则自动使用当前工作目录
     callbacks: AgentCallbacks = field(default_factory=AgentCallbacks)
-    max_tool_rounds: int = 8
+    max_tool_rounds: int = 16
 
     def __post_init__(self):
         # 1. 确定项目根目录

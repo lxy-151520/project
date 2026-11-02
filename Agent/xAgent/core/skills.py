@@ -93,13 +93,13 @@ def build_skills_prompt(skills: list[SkillInfo]) -> str:
     """把发现的 Skill 整理成注入 System Prompt 的那段说明文字。"""
     if not skills:
         return ""
-    lines = ["You have access to the following skills:"]
+    lines = ["你可以使用以下 Skill(技能),每个 Skill 是 .agents/skills 下的一个目录:"]
     for s in skills:
         lines.append(f"- `{s.name}`: {s.description}")
-    lines.append(
-        "Use the `loadSkill` tool to load the full instructions of a skill "
-        "when needed. You can also load additional files referenced by a skill."
-    )
+    lines.append("使用规则:")
+    lines.append("1. 需要用到某个 Skill 时,必须调用 loadSkill 工具(name 用上面反引号里的名字),读完完整说明后再按其中步骤执行。")
+    lines.append("2. Skill 的内容只能通过工具读取,不要凭记忆复述或自行编造 Skill 的执行命令。")
+    lines.append("3. Skill 若引用了 references/ 等附属文件,可用 loadSkill 的 filename 参数读取。")
     return "\n".join(lines)
 
 
