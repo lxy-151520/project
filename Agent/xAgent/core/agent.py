@@ -11,8 +11,9 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from .llm import LLMClient
+from .mcp_client import McpManager, load_mcp_config
 from .skills import discover_skills, build_skills_prompt
-from .tools import TOOL_MAP, TOOL_SCHEMAS, skill_tools
+from .tools import TOOL_MAP, TOOL_SCHEMAS, skill_tools, register_mcp_tools
 
 
 # ---------- UI 事件回调(所有钩子都是可选的) ----------
@@ -63,6 +64,31 @@ class Agent:
         # 2. 发现 Skill,注入 System Prompt
         discovered = discover_skills(root)
         skill_prompt = build_skills_prompt(discovered)
+
+        # 3. 加载 .mcp.json,连接 MCP Server 并注册其工具
+        self.mcp_errors: list[str] = []
+        mcp_cfg = load_mcp_config(root)
+        if mcp_cfg:
+            try:
+                mgr = McpManager(mcp_cfg)
+                self.mcp_errors = mgr.bootstrap()
+                n = register_mcp_tools(mgr)
+                if n:
+                    mcp_names = ", ".join(
+                        s["function"]["name"] for s in mgr.schemas[:10]
+                    )
+                    more = f" 等{len(mgr.schemas)}个" if len(mgr.schemas) > 10 else ""
+                    skill_prompt = (
+                        f"已连接 MCP Server,以下工具可直接调用(名称形如 服务器__工具):\n"
+                        f"  {mcp_names}{more}\n\n" + skill_prompt
+                    )
+                for err in self.mcp_errors:
+                    if self.callbacks.on_error:
+                        self.callbacks.on_error(err)
+            except Exception as e:
+                self.mcp_errors.append(f"MCP 初始化失败: {e}")
+                if self.callbacks.on_error:
+                    self.callbacks.on_error(f"MCP 初始化失败: {e}")
 
         base = self.system_prompt or DEFAULT_SYSTEM
         final_prompt = (base + "\n\n" + skill_prompt) if skill_prompt else base

@@ -32,6 +32,23 @@ TOOL_MAP = {
 }
 
 
+def register_mcp_tools(manager) -> int:
+    """把 McpManager 发现的工具动态注册进 TOOL_MAP / TOOL_SCHEMAS。
+
+    返回成功注册的工具数。已注册过的同名工具会被跳过,避免重复。
+    """
+    added = 0
+    for schema in manager.schemas:
+        name = schema["function"]["name"]
+        if name in TOOL_MAP:
+            continue
+        # 闭包捕获当前 manager 与 name
+        TOOL_MAP[name] = lambda _m=manager, _n=name, **kw: _m.call(_n, kw)
+        TOOL_SCHEMAS.append(schema)
+        added += 1
+    return added
+
+
 def _fn(name: str, desc: str, properties: dict, required: list[str] | None = None) -> dict:
     return {
         "type": "function",
