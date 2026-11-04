@@ -14,6 +14,8 @@ from .llm import LLMClient
 from .mcp_client import McpManager, load_mcp_config
 from .skills import discover_skills, build_skills_prompt
 from .tools import TOOL_MAP, TOOL_SCHEMAS, skill_tools, register_mcp_tools
+from . import context as ctx
+from .tools import context_tools
 
 
 # ---------- UI 事件回调(所有钩子都是可选的) ----------
@@ -26,6 +28,7 @@ class AgentCallbacks:
     on_token:          Optional[Callable[[str], None]] = None                # 流式 token
     on_response_done:  Optional[Callable[[str], None]] = None                # 完整回复
     on_error:          Optional[Callable[[str], None]] = None                # 错误消息
+    on_context_usage:  Optional[Callable[[dict], None]] = None               # 上下文占用状态(每次 LLM 响应后)
 
 
 DEFAULT_SYSTEM = (
@@ -36,6 +39,7 @@ DEFAULT_SYSTEM = (
     "  - 命令行: runCommand(执行本地 python/git 等命令)\n"
     "  - Skill 动态加载: loadSkill(加载 .agents/skills 下的 Skill 完整说明或附属文件)\n"
     "  - Skill 创建: createSkill(按 Agent Skills 规范生成 .agents/skills/<name>/SKILL.md)\n"
+    "  - 历史上下文检索: recallContext(在 .agents/context 的压缩归档中按关键词查找原始记录)\n"
     "回答要简洁。调用工具时严格按 schema 提供参数。"
     "区分意图:用户要写通知、审代码等具体任务时,先用 loadSkill 加载最匹配的 Skill 并按其规则执行,"
     "不要为此新建 Skill;只有用户明确要求“新建/创建一个技能”时才调用 createSkill。"
@@ -59,7 +63,9 @@ class Agent:
         # 1. 确定项目根目录
         root = Path(self.project_root) if self.project_root else Path.cwd()
         root = root.resolve()
+        self.root = root
         skill_tools.set_project_root(root)
+        context_tools.set_project_root(root)
 
         # 2. 发现 Skill,注入 System Prompt
         discovered = discover_skills(root)
@@ -96,14 +102,104 @@ class Agent:
             {"role": "system", "content": final_prompt}
         ]
 
+        # 4. 上下文监控状态
+        self.context_window: int = getattr(self.llm.cfg, "context_window", ctx.DEFAULT_CONTEXT_WINDOW)
+        self.context_window_is_default: bool = getattr(
+            self.llm.cfg, "context_window_is_default", True
+        )
+        self._api_tokens: int = 0        # 模型 API 最近一次报告的 total_tokens
+        self.compacting: bool = False    # 压缩进行中:禁止接收新任务/调用工具
+
     # ---------- 公开 API ----------
     def reset(self):
         """清空对话历史(保留 system)。"""
         self.messages = self.messages[:1]
+        self._api_tokens = 0
+
+    # ---------- 上下文监控 ----------
+    def context_status(self) -> dict:
+        """当前上下文占用情况。Token 数取「估算值」与「API 报告值」较大者。"""
+        estimated = ctx.conversation_tokens(self.messages)
+        used = max(estimated, self._api_tokens)
+        window = self.context_window or ctx.DEFAULT_CONTEXT_WINDOW
+        percent = used / window if window else 0.0
+        return {
+            "used": used,
+            "window": window,
+            "percent": percent,
+            "is_default": self.context_window_is_default,
+            "exceeded": percent >= ctx.COMPACT_RATIO,
+        }
+
+    def is_context_full(self) -> bool:
+        """是否已达到压缩阈值(80%),此时应暂停接收普通提示词。"""
+        return self.context_status()["exceeded"]
+
+    # ---------- 上下文压缩 ----------
+    def compact(self) -> dict:
+        """手动压缩上下文:归档原始记录 -> LLM 生成摘要 -> 用摘要替换历史。
+
+        返回 {"ok": True, "archive_id", "path", "summary"} 或 {"ok": False, "error"}。
+        任何一步失败都保留原有上下文,允许重新执行。
+        """
+        cb = self.callbacks
+        if self.compacting:
+            return {"ok": False, "error": "上下文压缩已在进行中"}
+        if len(self.messages) <= 1:
+            return {"ok": False, "error": "当前没有可压缩的历史上下文"}
+
+        self.compacting = True
+        try:
+            # 1) 先归档完整原始上下文,落盘成功才继续
+            archive_id, path = ctx.archive_messages(self.root, self.messages)
+
+            # 2) 只用 LLM 生成摘要(不挂 tools)
+            transcript = ctx.render_transcript(self.messages[1:])
+            resp = self.llm.chat([
+                {"role": "system", "content": ctx.COMPACT_PROMPT},
+                {"role": "user", "content": transcript + ctx.COMPACT_USER_SUFFIX},
+            ])
+            summary = (resp["message"].get("content") or "").strip()
+            if not summary:
+                raise RuntimeError("LLM 返回空摘要,已保留原有上下文")
+
+            # 3) 用摘要替换历史:保留 System Prompt 与工具定义
+            system_msg = self.messages[0]
+            note = ctx.archive_note(archive_id)
+            self.messages = [
+                system_msg,
+                {"role": "user", "content": f"【上下文压缩摘要】\n\n{summary}\n\n---\n\n{note}"},
+            ]
+            self._api_tokens = 0
+            if cb.on_context_usage:
+                cb.on_context_usage(self.context_status())
+            return {"ok": True, "archive_id": archive_id, "path": str(path), "summary": summary}
+        except Exception as e:
+            if cb.on_error:
+                cb.on_error(f"上下文压缩失败: {e}")
+            return {"ok": False, "error": str(e)}
+        finally:
+            self.compacting = False
 
     def chat(self, user_input: str) -> str:
         """发送一条用户消息,返回最终文本回复。可能触发多轮工具调用。"""
         cb = self.callbacks
+        # 压缩期间禁止继续处理原有任务
+        if self.compacting:
+            msg = "上下文压缩正在进行,暂时不能处理新任务,请稍候。"
+            if cb.on_error:
+                cb.on_error(msg)
+            return msg
+        # 达到 80% 后暂停接收普通提示词,直到压缩完成
+        if self.is_context_full():
+            msg = ("上下文已使用超过 80%(达到压缩阈值),已暂停接收新的提示词。"
+                   "请先执行 /compact 命令压缩上下文,完成后再继续。")
+            if cb.on_user_message:
+                cb.on_user_message(user_input)
+            if cb.on_error:
+                cb.on_error(msg)
+            return msg
+
         if cb.on_user_message:
             cb.on_user_message(user_input)
         self.messages.append({"role": "user", "content": user_input})
@@ -121,10 +217,18 @@ class Agent:
 
     # ---------- 内部主循环 ----------
     def _loop(self) -> str:
+        cb = self.callbacks
         for _ in range(self.max_tool_rounds):
             resp = self.llm.chat(self.messages, tools=TOOL_SCHEMAS)
             msg = resp["message"]
             finish = resp["finish_reason"]
+
+            # 每次 LLM 响应后更新上下文占用:优先用 API 的 usage
+            total = (resp.get("usage") or {}).get("total_tokens")
+            if isinstance(total, int) and total > 0:
+                self._api_tokens = total
+            if cb.on_context_usage:
+                cb.on_context_usage(self.context_status())
 
             if finish == "tool_calls" and msg.get("tool_calls"):
                 # 把 assistant 的 tool_calls 加入历史
@@ -179,4 +283,6 @@ class Agent:
                 cb.on_token(piece)
         text = "".join(parts)
         self.messages.append({"role": "assistant", "content": text})
+        if cb.on_context_usage:
+            cb.on_context_usage(self.context_status())
         return text

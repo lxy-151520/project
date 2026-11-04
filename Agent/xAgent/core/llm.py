@@ -53,6 +53,8 @@ class LLMClient:
         return {
             "message": choice["message"],
             "finish_reason": choice.get("finish_reason", "stop"),
+            # 模型 API 返回的 token 用量,用于上下文占用监控
+            "usage": data.get("usage") or {},
         }
 
     # ---------- 流式:输出最终回复 ----------

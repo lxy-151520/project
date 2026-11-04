@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """工具汇总:TOOL_MAP (函数名 -> 可调用对象) 和 TOOL_SCHEMAS (OpenAI function calling schema)。"""
-from . import system_tools, file_tools, web_tools, cli_tools, run_tool, skill_tools
+from . import system_tools, file_tools, web_tools, cli_tools, run_tool, skill_tools, context_tools
 
 # ---------- 函数名 -> 实际函数 ----------
 TOOL_MAP = {
@@ -29,6 +29,8 @@ TOOL_MAP = {
     "loadSkill":   skill_tools.loadSkill,
     # Skill 创建
     "createSkill": skill_tools.createSkill,
+    # 历史上下文检索
+    "recallContext": context_tools.recallContext,
 }
 
 
@@ -140,4 +142,10 @@ TOOL_SCHEMAS = [
         "name":         {"type": "string", "description": "Skill 名称,只能用全小写英文、数字和连字符,例如 'code-review'、'pdf-parse'"},
         "skillContext": {"type": "string", "description": "要写入 SKILL.md 的完整内容,必须以 YAML frontmatter(前后用 --- 包裹)开头,包含 name 与 description 字段,其后写正文;其中 name 必须与参数 name 完全相同"},
     }, ["name", "skillContext"]),
+
+    # ---- 历史上下文检索 ----
+    _fn("recallContext", "在上下文压缩归档(.agents/context/*.jsonl)中做本地关键词全文检索。当压缩摘要里缺少某个历史细节(如旧的文件路径、命令、错误信息、用户早期要求)时调用它取回原始内容。不传 id 时检索所有归档,建议先用短关键词,必要时再指定归档编号。", {
+        "text": {"type": "string", "description": "要查找的关键词或文本片段,例如 'config.ini'、'report.pdf'、'ModuleNotFoundError'"},
+        "id":   {"type": "string", "description": "可选,归档编号(如 20261022-153000)。不传则在所有历史归档中检索"},
+    }, ["text"]),
 ]

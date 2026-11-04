@@ -50,14 +50,20 @@ class XAgentApp(App):
     """xAgent Textual 界面。"""
 
     CSS = """
+    #ctxbar {
+        height: 1;
+        background: $panel;
+        padding: 0 1;
+        content-align: left middle;
+    }
     #log {
         height: 1fr;
         border: solid $primary;
         padding: 0 1;
     }
     #input {
-        dock: bottom;
-        margin: 1 1;
+        height: 3;
+        margin: 0 1 1 1;
     }
     """
 
@@ -79,6 +85,7 @@ class XAgentApp(App):
                 on_token=self._ev_token,
                 on_response_done=self._ev_response_done,
                 on_error=self._ev_error,
+                on_context_usage=self._ev_context_usage,
             )
             self.agent = Agent(llm=llm, callbacks=cb)
         except Exception as e:
@@ -103,13 +110,17 @@ class XAgentApp(App):
         self._streaming_line_open = False
         self._stream_text: str = ""
         self._stream_static: Static | None = None
+        # 上下文压缩状态
+        self._compacting = False
+        self._warned_full = False
 
     # ---------- UI 布局 ----------
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True, name="xAgent")
         with Vertical():
             yield VerticalScroll(id="log")
-            yield Input(placeholder="输入消息,Enter 发送...", id="input")
+            yield Static("上下文: 未就绪", id="ctxbar")
+            yield Input(placeholder="输入消息,Enter 发送... (压缩上下文请用 /compact)", id="input")
         yield Footer()
 
     def on_mount(self):
@@ -121,8 +132,10 @@ class XAgentApp(App):
             if self._init_error:
                 self._log(f"[dim]{_esc(self._init_error)}[/]")
         else:
-            self._log("[bold cyan]xAgent 已启动[/]  支持工具: getDate / isLeapYear / 文件目录操作 / searchWeb / fetchWeb / Run / loadSkill / createSkill")
+            self._log("[bold cyan]xAgent 已启动[/]  支持工具: getDate / isLeapYear / 文件目录操作 / searchWeb / fetchWeb / Run / loadSkill / createSkill / recallContext")
             self._log("[dim]试试: 今天日期 / 2024年是闰年吗 / 搜索国庆放几天 / 运行 python -V[/]")
+            self._log("[dim]上下文接近上限时输入 [bold]/compact[/bold] 手动压缩[/]")
+            self._update_ctxbar()
 
     # ---------- 输入提交 ----------
     def on_input_submitted(self, event: Input.Submitted):
@@ -130,9 +143,27 @@ class XAgentApp(App):
         if not text:
             return
         event.input.value = ""
+
+        if self._compacting:
+            self._log("[yellow]上下文压缩进行中,请稍候再输入…[/]")
+            return
         if self.agent is None:
             self._log("[bold red]Agent 未就绪[/] 无法处理请求,请检查配置后重启")
             return
+
+        # 手动触发上下文压缩
+        if text.lower() == "/compact":
+            self._start_compact()
+            return
+        if text.startswith("/"):
+            self._log(f"[yellow]未知命令:[/] {_esc(text)}  可用命令: [bold]/compact[/]")
+            return
+
+        # 达到 80% 后暂停接收普通提示词
+        if self.agent.is_context_full():
+            self._log("[bold red]⚠ 上下文已占用 80% 以上,已暂停接收新任务。[/] 请先执行 [bold]/compact[/] 压缩上下文")
+            return
+
         self._log(f"[bold green]你:[/] {_esc(text)}")
         self._close_stream_line()
         self._run_agent(text)
@@ -142,6 +173,68 @@ class XAgentApp(App):
         def job():
             self.agent.chat(text)
         self.run_worker(job, thread=True, exclusive=True, group="chat")
+
+    # ---------- 上下文压缩 ----------
+    def _start_compact(self):
+        """手动触发 /compact:归档 -> LLM 摘要 -> 替换上下文。"""
+        if self.agent is None or self._compacting:
+            return
+        self._compacting = True
+        self._close_stream_line()
+        self._log("[bold cyan]⟳ 开始压缩上下文[/] 正在归档原始记录并请求 LLM 生成摘要…")
+
+        def job():
+            self.call_from_thread(self._after_compact, self.agent.compact())
+
+        self.run_worker(job, thread=True, exclusive=True, group="compact")
+
+    def _after_compact(self, result: dict):
+        self._compacting = False
+        if result.get("ok"):
+            self._warned_full = False
+            self._log(
+                f"[bold green]✓ 上下文压缩完成[/]  归档编号 [bold]{_esc(result['archive_id'])}[/]"
+                f"  → {_esc(result['path'])}"
+            )
+            self._log("[dim]摘要已替换历史上下文,可以继续输入任务;缺失的历史细节可用 recallContext 检索归档。[/]")
+            self._update_ctxbar()
+        else:
+            self._log(f"[bold red]✗ 上下文压缩失败:[/] {_esc(result.get('error', '未知错误'))}")
+            self._log("[dim]原有上下文已保留,可重新执行 /compact 再试。[/]")
+
+    # ---------- 上下文占用显示 ----------
+    def _update_ctxbar(self, status: dict | None = None):
+        """在顶部固定位置显示 使用量 / 窗口 / 百分比。"""
+        bar = self.query_one("#ctxbar", Static)
+        if self.agent is None:
+            bar.update("[dim]上下文: 未就绪[/]")
+            return
+
+        st = status or self.agent.context_status()
+        pct = st["percent"] * 100
+        color = "red" if pct >= 80 else ("yellow" if pct >= 60 else "green")
+        used = f"{st['used'] / 1000:.1f}k"
+        window = f"{st['window'] / 1000:.1f}k"
+        text = f"[bold {color}]上下文 {used} / {window} ({pct:.1f}%)[/]"
+        if st.get("is_default"):
+            text += " [dim]· 窗口大小默认 128k[/]"
+        if pct >= 80:
+            text += " [bold red]⚠ 已达 80%,请执行 /compact[/]"
+        bar.update(text)
+        # 同时在标题栏显示一份,避免某些终端把独立状态行裁成半行
+        plain = f"上下文 {used}/{window} ({pct:.1f}%)"
+        self.sub_title = plain if pct < 80 else plain + " ⚠ 请 /compact"
+
+        # 首次越过阈值时在日志区提示一次,避免刷屏
+        if pct >= 80 and not self._warned_full:
+            self._warned_full = True
+            self._log("[bold red]⚠ 上下文占用已达 80%,已暂停接收新任务。请输入 /compact 压缩上下文。[/]")
+        elif pct < 80:
+            self._warned_full = False
+
+    def _ev_context_usage(self, status: dict):
+        """Agent 每次 LLM 响应后回调(worker 线程)。"""
+        self.call_from_thread(self._update_ctxbar, status)
 
     # ---------- Agent 回调(注意:在 worker 线程中触发) ----------
     def _ev_tool_call(self, name: str, args: dict):

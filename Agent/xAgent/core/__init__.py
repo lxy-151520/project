@@ -4,10 +4,12 @@ from .agent import Agent, AgentCallbacks, DEFAULT_SYSTEM
 from .config import LLMConfig, load_config
 from .llm import LLMClient
 from .tools import TOOL_MAP, TOOL_SCHEMAS
+from . import context
 
 __all__ = [
     "Agent", "AgentCallbacks", "DEFAULT_SYSTEM",
     "LLMConfig", "load_config",
     "LLMClient",
     "TOOL_MAP", "TOOL_SCHEMAS",
+    "context",
 ]
