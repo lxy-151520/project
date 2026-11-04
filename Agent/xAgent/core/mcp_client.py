@@ -46,6 +46,60 @@ def _sanitize(name: str) -> str:
     return s[:64] or "tool"
 
 
+def _declared_type(spec: dict) -> str | None:
+    """取 schema 声明的有效类型。
+
+    MCP 服务端(pydantic 生成)常用 {"anyOf":[{"type":"integer"},{"type":"null"}]}
+    表示可选参数,这里取第一个非 null 的类型。
+    """
+    t = spec.get("type")
+    if isinstance(t, str) and t != "null":
+        return t
+    for sub in spec.get("anyOf") or spec.get("oneOf") or []:
+        if isinstance(sub, dict):
+            st = sub.get("type")
+            if isinstance(st, str) and st != "null":
+                return st
+    return None
+
+
+def _coerce_args(arguments: dict, props: dict) -> dict:
+    """按 inputSchema 把 LLM 传来的参数值纠正成声明的类型。
+
+    模型经常把整数/布尔写成字符串(如 pageSize="3"),服务端 pydantic 会
+    直接拒绝并且模型会反复用同样的错误参数重试。这里做一次宽松转换。
+    """
+    if not isinstance(arguments, dict):
+        return {}
+    out = dict(arguments)
+    for key, spec in (props or {}).items():
+        if key not in out or not isinstance(spec, dict):
+            continue
+        want = _declared_type(spec)
+        val = out[key]
+        try:
+            if want == "integer":
+                if isinstance(val, str):
+                    out[key] = int(float(val.strip()))
+                elif isinstance(val, float) and val.is_integer():
+                    out[key] = int(val)
+            elif want == "number" and isinstance(val, str):
+                out[key] = float(val.strip())
+            elif want == "boolean" and isinstance(val, str):
+                low = val.strip().lower()
+                if low in ("true", "1", "yes"):
+                    out[key] = True
+                elif low in ("false", "0", "no"):
+                    out[key] = False
+            elif want == "array" and isinstance(val, str):
+                parsed = json.loads(val)
+                if isinstance(parsed, list):
+                    out[key] = parsed
+        except (ValueError, json.JSONDecodeError):
+            pass
+    return out
+
+
 def _schema(exposed_name: str, description: str, input_schema: dict | None) -> dict:
     """把 MCP Tool 转成 OpenAI function calling schema。"""
     params = input_schema if isinstance(input_schema, dict) else {}
@@ -71,6 +125,8 @@ class McpManager:
         self._route: dict[str, tuple[str, str]] = {}
         # 暴露给 LLM 的 schema 列表
         self.schemas: list[dict] = []
+        # exposed_name -> inputSchema.properties(用于参数类型纠正)
+        self._props: dict[str, dict] = {}
 
     # ---------- 公开 API ----------
     def bootstrap(self) -> list[str]:
@@ -91,6 +147,8 @@ class McpManager:
                     exposed = _sanitize(f"{base}_{i}")
                     i += 1
                 self._route[exposed] = (sname, tool.name)
+                schema = tool.input_schema if isinstance(tool.input_schema, dict) else {}
+                self._props[exposed] = schema.get("properties", {}) if isinstance(schema.get("properties"), dict) else {}
                 self.schemas.append(_schema(exposed, tool.description, tool.input_schema))
         return errors
 
@@ -104,7 +162,8 @@ class McpManager:
         if cfg is None:
             return f"MCP server '{sname}' 不可用"
         try:
-            return asyncio.run(self._call_tool(cfg, original, arguments or {}))
+            args = _coerce_args(arguments, self._props.get(exposed_name, {}))
+            return asyncio.run(self._call_tool(cfg, original, args))
         except Exception as e:  # noqa: BLE001
             return f"[MCP 调用错误] server={sname} tool={original}: {e}"
 
