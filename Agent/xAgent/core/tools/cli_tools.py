@@ -40,8 +40,22 @@ DANGEROUS_PATTERNS: list[str] = [
     "wget .*\\| sh",
 ]
 
-DEFAULT_TIMEOUT = 10          # 秒
-MAX_OUTPUT_CHARS = 4000      # 截断输出
+DEFAULT_TIMEOUT = 10          # 秒(可由 config.ini [tools] command_timeout 覆盖)
+DEFAULT_TIMEOUT_MAX = 60      # 秒上限
+MAX_OUTPUT_CHARS = 4000      # 截断输出(可由 config.ini 覆盖)
+
+
+def configure(default_timeout: int | None = None, timeout_max: int | None = None,
+              max_output: int | None = None) -> None:
+    """由 config.ini 注入运行参数。"""
+    global DEFAULT_TIMEOUT, DEFAULT_TIMEOUT_MAX, MAX_OUTPUT_CHARS
+    if default_timeout:
+        DEFAULT_TIMEOUT = default_timeout
+    if timeout_max:
+        DEFAULT_TIMEOUT_MAX = timeout_max
+    if max_output:
+        MAX_OUTPUT_CHARS = max_output
+
 
 
 def _is_dangerous(command_line: str) -> bool:
@@ -63,16 +77,18 @@ def _split_args(command_line: str) -> list[str]:
         return command_line.split()
 
 
-def runCommand(command: str, timeout: int = DEFAULT_TIMEOUT) -> str:
+def runCommand(command: str, timeout: int | None = None) -> str:
     """执行一条本地命令, 返回 stdout + stderr。
 
     Args:
         command: 要执行的命令行 (字符串), 例如 "python -V"。
-        timeout: 超时秒数, 默认 10s, 上限 60s。
+        timeout: 超时秒数, 缺省用 config.ini 的 [tools] command_timeout。
 
     Returns:
         命令输出 (stdout + stderr), 超长截断; 失败时返回错误描述。
     """
+    if timeout is None:
+        timeout = DEFAULT_TIMEOUT
     if not command or not command.strip():
         return "[runCommand 参数错误] command 不能为空"
 
@@ -96,7 +112,7 @@ def runCommand(command: str, timeout: int = DEFAULT_TIMEOUT) -> str:
         )
 
     # 限制超时上限
-    timeout = max(1, min(int(timeout), 60))
+    timeout = max(1, min(int(timeout), DEFAULT_TIMEOUT_MAX))
 
     try:
         result = subprocess.run(

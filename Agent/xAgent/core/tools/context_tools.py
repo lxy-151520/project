@@ -13,10 +13,22 @@ _PROJECT_ROOT: Path = Path.cwd()
 
 ARCHIVE_SUBDIR = Path(".agents") / "context"
 
-# 单次检索的输出上限,避免检索结果再次占满上下文
+# 单次检索的输出上限,避免检索结果再次占满上下文(可由 config.ini [tools] 覆盖)
 _MAX_RESULTS = 8
 _MAX_SNIPPET = 300
 _MAX_OUTPUT = 4_000
+
+
+def configure(max_results: int | None = None, snippet_chars: int | None = None,
+              max_output: int | None = None) -> None:
+    """由 config.ini 注入运行参数。"""
+    global _MAX_RESULTS, _MAX_SNIPPET, _MAX_OUTPUT
+    if max_results:
+        _MAX_RESULTS = max_results
+    if snippet_chars:
+        _MAX_SNIPPET = snippet_chars
+    if max_output:
+        _MAX_OUTPUT = max_output
 
 
 def set_project_root(root: str | Path) -> None:

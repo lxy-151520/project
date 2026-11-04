@@ -13,9 +13,11 @@ from .config import LLMConfig
 class LLMClient:
     """对 OpenAI 兼容接口的最小封装:非流式请求 + 流式请求。"""
 
-    def __init__(self, cfg: LLMConfig, timeout: int = 120):
+    def __init__(self, cfg: LLMConfig):
         self.cfg = cfg
-        self.timeout = timeout
+        # 超时/重试次数来自 config.ini ([llm] request_timeout / retry_times)
+        self.timeout = cfg.request_timeout
+        self.retries = max(1, cfg.retry_times)
         self._url = f"{cfg.base_url.rstrip('/')}/chat/completions"
         self._headers = {
             "Authorization": f"Bearer {cfg.api_key}",
@@ -23,15 +25,15 @@ class LLMClient:
         }
 
     def _post(self, payload: dict, **kwargs) -> requests.Response:
-        """POST,遇到超时/连接错误自动重试一次(网络抖动很常见)。"""
+        """POST,按配置的重试次数重试(网络抖动很常见)。"""
         last_err: Exception | None = None
-        for attempt in range(2):
+        for attempt in range(self.retries):
             try:
                 return requests.post(self._url, headers=self._headers, json=payload,
                                      timeout=self.timeout, **kwargs)
             except (ReqTimeout, ReqConnectionError) as e:
                 last_err = e
-                if attempt == 0:
+                if attempt < self.retries - 1:
                     time.sleep(2)
         raise last_err  # type: ignore[misc]
 

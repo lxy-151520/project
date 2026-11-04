@@ -11,17 +11,30 @@ import subprocess
 import os
 
 
-DEFAULT_TIMEOUT = 15          # 秒
-MAX_OUTPUT_CHARS = 4000      # 截断输出
+DEFAULT_TIMEOUT = 15          # 秒(可由 config.ini [tools] run_timeout 覆盖)
+DEFAULT_TIMEOUT_MAX = 120     # 秒上限
+MAX_OUTPUT_CHARS = 4000      # 截断输出(可由 config.ini 覆盖)
 
 
-def Run(command: str, args: list[str] | None = None, timeout: int = DEFAULT_TIMEOUT) -> str:
+def configure(default_timeout: int | None = None, timeout_max: int | None = None,
+              max_output: int | None = None) -> None:
+    """由 config.ini 注入运行参数。"""
+    global DEFAULT_TIMEOUT, DEFAULT_TIMEOUT_MAX, MAX_OUTPUT_CHARS
+    if default_timeout:
+        DEFAULT_TIMEOUT = default_timeout
+    if timeout_max:
+        DEFAULT_TIMEOUT_MAX = timeout_max
+    if max_output:
+        MAX_OUTPUT_CHARS = max_output
+
+
+def Run(command: str, args: list[str] | None = None, timeout: int | None = None) -> str:
     """执行一条本地命令, 用 subprocess + shell=False, 避免注入.
 
     Args:
         command:  可执行程序的名称或完整路径, 例如 "python" 或 "git".
         args:     参数列表, 例如 ["-V"], 默认空.
-        timeout:  超时秒数, 默认 15s, 上限 120s.
+        timeout:  超时秒数, 缺省用 config.ini 的 [tools] run_timeout.
 
     Returns:
         格式:
@@ -29,6 +42,8 @@ def Run(command: str, args: list[str] | None = None, timeout: int = DEFAULT_TIME
             Python 3.13.14
         失败/超时会在 exit_code 行标注原因.
     """
+    if timeout is None:
+        timeout = DEFAULT_TIMEOUT
     if not command or not command.strip():
         return "[Run 参数错误] command 不能为空"
 
@@ -36,7 +51,7 @@ def Run(command: str, args: list[str] | None = None, timeout: int = DEFAULT_TIME
     # 构造 subprocess 需要的列表 (command + args)
     cmd_list = [command.strip()] + [str(a) for a in args]
 
-    timeout = max(1, min(int(timeout), 120))
+    timeout = max(1, min(int(timeout), DEFAULT_TIMEOUT_MAX))
 
     try:
         result = subprocess.run(

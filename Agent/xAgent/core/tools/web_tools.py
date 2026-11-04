@@ -41,16 +41,35 @@ def _get_search_api_key() -> str:
     return ""
 
 
-def searchWeb(query: str, top_k: int = 8) -> str:
+DEFAULT_TOP_K = 8             # 可由 config.ini [tools] search_top_k 覆盖
+TOP_K_MAX = 10
+DEFAULT_FETCH_CHARS = 4000     # 可由 config.ini [tools] fetch_max_chars 覆盖
+
+
+def configure(top_k: int | None = None, top_k_max: int | None = None,
+              fetch_max_chars: int | None = None) -> None:
+    """由 config.ini 注入运行参数。"""
+    global DEFAULT_TOP_K, TOP_K_MAX, DEFAULT_FETCH_CHARS
+    if top_k:
+        DEFAULT_TOP_K = top_k
+    if top_k_max:
+        TOP_K_MAX = top_k_max
+    if fetch_max_chars:
+        DEFAULT_FETCH_CHARS = fetch_max_chars
+
+
+def searchWeb(query: str, top_k: int | None = None) -> str:
     """调用百度千帆 AI 搜索,返回精简的搜索结果列表。
 
     Args:
         query: 搜索关键词或问题,长度 <= 72 字符 (百度要求)。
-        top_k: 返回结果条数,默认 8。
+        top_k: 返回结果条数,缺省用 config.ini 的 [tools] search_top_k。
 
     Returns:
         格式化后的搜索结果字符串;失败时返回错误信息。
     """
+    if top_k is None:
+        top_k = DEFAULT_TOP_K
     if requests is None:
         return "[searchWeb 不可用] 请先安装 requests: pip install requests"
 
@@ -67,7 +86,7 @@ def searchWeb(query: str, top_k: int = 8) -> str:
     payload = {
         "messages": [{"role": "user", "content": query}],
         "search_source": "baidu_search_v2",
-        "resource_type_filter": [{"type": "web", "top_k": min(top_k, 10)}],
+        "resource_type_filter": [{"type": "web", "top_k": min(top_k, TOP_K_MAX)}],
     }
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -124,16 +143,18 @@ def searchWeb(query: str, top_k: int = 8) -> str:
 # fetchWeb —— subprocess + curl + trafilatura 抓网页正文
 # ============================================================
 
-def fetchWeb(url: str, max_chars: int = 4000) -> str:
+def fetchWeb(url: str, max_chars: int | None = None) -> str:
     """抓取指定 URL 的网页正文,转换为 Markdown 后返回。
 
     Args:
         url: 目标网页 URL。
-        max_chars: 返回正文的最大字符数,默认 4000。
+        max_chars: 返回正文的最大字符数,缺省用 config.ini 的 [tools] fetch_max_chars。
 
     Returns:
         Markdown 格式的网页正文;失败时返回错误信息。
     """
+    if max_chars is None:
+        max_chars = DEFAULT_FETCH_CHARS
     if not url or not url.strip():
         return "[fetchWeb 参数错误] url 不能为空"
 

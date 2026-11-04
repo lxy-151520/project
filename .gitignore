@@ -33,3 +33,5 @@ config.ini
 
 # 上下文压缩归档（运行时产物，体积大，不入库）
 .agents/context/
+# 会话事件日志（运行时产物，不入库）
+.agents/sessions/

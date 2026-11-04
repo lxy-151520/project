@@ -160,3 +160,9 @@ def archive_note(archive_id: str, when: datetime | None = None) -> str:
         f"此前上下文已于 {ts} 完成压缩,原始上下文保存在编号为 {archive_id} 的归档文件中。"
         "如需查找历史信息,请使用 recallContext 工具。"
     )
+
+
+def compact_prompt(target_tokens: int = SUMMARY_TARGET_TOKENS) -> str:
+    """按配置的摘要目标 token 数生成专用压缩 Prompt。"""
+    return COMPACT_PROMPT.replace("约 5,000 Tokens", f"约 {target_tokens:,} Tokens")
+

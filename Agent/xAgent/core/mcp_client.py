@@ -40,6 +40,28 @@ def load_mcp_config(project_root: Path) -> dict | None:
     return data
 
 
+def _root_error(e: BaseException) -> BaseException:
+    """穿透 ExceptionGroup / __cause__ 链,取出真正的底层异常。
+
+    MCP SDK 内部用 anyio TaskGroup,连接失败时对外只暴露
+    "unhandled errors in a TaskGroup (1 sub-exception)",真正原因(如
+    MCPError: Server returned an error response / httpx.ConnectError)
+    藏在子异常里,这里把它挖出来给用户看。
+    """
+    cur = e
+    for _ in range(10):
+        subs = getattr(cur, "exceptions", None)
+        if subs:
+            cur = subs[0]
+            continue
+        nxt = cur.__cause__ or cur.__context__
+        if nxt is not None:
+            cur = nxt
+            continue
+        break
+    return cur
+
+
 def _sanitize(name: str) -> str:
     """把任意字符串变成合法的 OpenAI function name(^[a-zA-Z0-9_-]{1,64}$)。"""
     s = _NAME_RE.sub("_", str(name))
@@ -129,6 +151,18 @@ class McpManager:
         self._props: dict[str, dict] = {}
 
     # ---------- 公开 API ----------
+    @property
+    def servers(self) -> list[str]:
+        """配置里的所有服务器名(含连接失败的)。"""
+        return list(self._servers)
+
+    def list_server_tools(self) -> dict[str, list[str]]:
+        """服务器名 -> 已发现的原始工具名列表。"""
+        out: dict[str, list[str]] = {}
+        for sname, original in self._route.values():
+            out.setdefault(sname, []).append(original)
+        return out
+
     def bootstrap(self) -> list[str]:
         """连接所有 server,列出工具,构建路由与 schema。返回错误信息列表。"""
         errors: list[str] = []
@@ -136,7 +170,11 @@ class McpManager:
             try:
                 tools = asyncio.run(self._list_tools(cfg))
             except Exception as e:  # noqa: BLE001
-                errors.append(f"MCP server '{sname}' 连接/发现工具失败: {e}")
+                root = _root_error(e)
+                errors.append(
+                    f"MCP server '{sname}' 连接/发现工具失败: "
+                    f"{type(root).__name__}: {root or '(空错误信息)'}"
+                )
                 continue
             for tool in tools:
                 exposed = _sanitize(f"{sname}__{tool.name}")
@@ -165,7 +203,8 @@ class McpManager:
             args = _coerce_args(arguments, self._props.get(exposed_name, {}))
             return asyncio.run(self._call_tool(cfg, original, args))
         except Exception as e:  # noqa: BLE001
-            return f"[MCP 调用错误] server={sname} tool={original}: {e}"
+            root = _root_error(e)
+            return f"[MCP 调用错误] server={sname} tool={original}: {type(root).__name__}: {root}"
 
     # ---------- 内部 ----------
     @contextlib.asynccontextmanager
